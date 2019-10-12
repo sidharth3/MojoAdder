@@ -2,46 +2,274 @@ module mojo_top (
     input clk,              // 50MHz clock
     input rst_n,            // reset button (active low)
     output led [8],         // 8 user controllable LEDs
-    input cclk,             // configuration clock, AVR ready when high
     output spi_miso,        // AVR SPI MISO
-    input spi_ss,           // AVR SPI Slave Select
-    input spi_mosi,         // AVR SPI MOSI
-    input spi_sck,          // AVR SPI Clock
     output spi_channel [4], // AVR general purpose pins (used by default to select ADC channel)
-    input avr_tx,           // AVR TX (FPGA RX)
     output avr_rx,          // AVR RX (FPGA TX)
-    input avr_rx_busy       // AVR RX buffer full
+    output io_led [3][8],   // LEDs on IO Shield
+    output io_seg [8],      // 7-segment LEDs on IO Shield
+    output io_sel [4],      // Digit select on IO Shield
+    input io_button [5],    // 5 buttons on IO Shield
+    input io_dip [3][8],     // DIP switches on IO Shield
     
-    output io_led [3][8],
-    output io_seg [8],
-    output io_sel [4],
-    output io_button [5],
-    output io_dip [3][8]
     output a,
     output b,
     output cin,
     input sum,
     input cout
-  ) {
+    
+  ) { 
+   
   sig rst;                  // reset signal
   
   .clk(clk) {
+    // The reset conditioner is used to synchronize the reset signal to the FPGA
+    // clock. This ensures the entire FPGA comes out of reset at the same time.
     reset_conditioner reset_cond;
+    
     edge_detector edge_detector (#RISE(1), #FALL(0));
-    .rst(rst){
-           
-      }
     
-    
+    .rst(rst) {
+      multi_seven_seg seg;
+      multi_dec_ctr dec_ctr;
+      counter ctr (#SIZE(1), #DIV(24));
+    }
   }
   
+  fsm state(.clk(clk)) = {IDLE, T1, T2, T3, T4, T5, T6, T7, T8, FAIL, SUCCESS};
+  stateCounter sc(.clk(clk),.rst(rst));
   always {
-    reset_cond.in = ~rst_n; // input raw inverted reset signal
-    rst = reset_cond.out;   // conditioned reset
+    a = 0;
+    b = 0;
+    cin = 0;
+    reset_cond.in = ~rst_n;   // input raw inverted reset signal
+    rst = reset_cond.out;     // conditioned reset
     
-    led = 8h00;             // turn LEDs off
-    spi_miso = bz;          // not using SPI
-    spi_channel = bzzzz;    // not using flags
-    avr_rx = bz;            // not using serial port
-  }
-}
+    led = c{3b0, io_button};  // connect buttons to LEDs
+    spi_miso = bz;            // not using SPI
+    spi_channel = bzzzz;      // not using flags
+    avr_rx = bz;              // not using serial port
+    edge_detector.in = ctr.value;
+    dec_ctr.inc = edge_detector.out;
+    
+    //default segment shows all zeroes to signify that segment is on
+    seg.values = {4h0, 4h0, 4h0, 4h0};
+    
+    io_seg = ~seg.seg; // connect segments to the driver
+    io_sel = ~seg.sel; // connect digit select to the driver
+    io_led = io_dip;   // connect the DIP switches to the LEDs
+    
+    case (state.q) { 
+      state.IDLE:
+      //start the verification by pressing the center button([1]), changes state to first test case
+            
+        if(io_button[1]) {
+          state.d = state.T1;
+        }
+      
+      // TEST ONE: 000
+      state.T1:
+      
+        a = 0;
+        b = 0;  
+        cin = 0;
+        io_led[2][7] = 1;
+        seg.values = {4h0, 4h0, 4h0, 4h0};
+        
+        // transit to next state if output is same as expected output and counter variable hits 1(to avoid transitions off-cycle)
+        if (sum == 0 && cout == 0 && sc.inc_state == 1) {
+          state.d = state.T2;
+        }
+        // if output is not correct, go to fail state
+        if (sum != 0 && cout != 0 && sc.inc_state == 1) {
+          state.d = state.FAIL;
+        }
+        // if reset button is pressed, change back to idle state
+        if (rst_n == 0) {
+          state.d = state.IDLE;
+        }
+
+   
+      // TEST TWO: 001
+      state.T2:
+        a = 0;
+        b = 0;
+        cin = 1;
+        
+        io_led[2][6] = 1;
+        seg.values = {4h0, 4h0, 4h0, 4h1};
+
+        
+        if (sum == 1 && cout == 0 && sc.inc_state == 1) {
+          state.d = state.T3;
+        }
+        
+        if (sum != 1 && cout != 0 && sc.inc_state == 1) {
+          state.d = state.FAIL;
+        }
+        
+        if(rst_n == 0) {
+          state.d = state.IDLE;
+        }
+        
+      // TEST THREE: 010
+      state.T3:
+        a = 0;
+        b = 1;
+        cin = 0;
+        
+        io_led[2][5] = 1;
+        seg.values = {4h0, 4h0, 4h1, 4h0};
+        
+        if (sum == 1 && cout == 0 && sc.inc_state == 1) {
+          state.d = state.T4;
+        }
+         
+        if (sum != 1 && cout != 0 && sc.inc_state == 1) {
+          state.d = state.FAIL;
+        }
+        
+        if(rst_n == 0) {
+          state.d = state.IDLE;
+        }
+        
+      // TEST FOUR: 011 
+      state.T4:
+        a = 0;
+        b = 1;
+        cin = 1;
+        
+        io_led[2][4] = 1;
+        seg.values = {4h0, 4h0, 4h1, 4h1};
+        
+        if (sum == 0 && cout == 1 && sc.inc_state == 1) {
+          state.d = state.T5;
+        }
+         
+        if (sum != 0 && cout != 1 && sc.inc_state == 1) {
+          state.d = state.FAIL;
+        }
+        
+        if(rst_n == 0) {
+          state.d = state.IDLE;
+        }
+     
+      // TEST FIVE: 100
+      state.T5:
+        a = 1;
+        b = 0;
+        cin = 0;
+        
+        io_led[2][3] = 1;
+        seg.values = {4h0, 4h1, 4h0, 4h0};
+        
+        if (sum == 1 && cout == 0 && sc.inc_state == 1) {
+          state.d = state.T6;
+        }
+         
+        if (sum != 1 && cout != 0 && sc.inc_state == 1) {
+          state.d = state.FAIL;
+        }
+        
+        if(rst_n == 0) {
+          state.d = state.IDLE;
+        }
+        
+        
+      // TEST SIX: 101
+      state.T6:
+        a = 1;
+        b = 0;
+        cin = 1;
+        
+        io_led[2][2] = 1;
+        seg.values = {4h0, 4h1, 4h0, 4h1};
+        
+        if (sum == 0 && cout == 1 && sc.inc_state == 1) {
+          state.d = state.T7;
+        }
+         
+        if (sum != 0 && cout != 1 && sc.inc_state == 1) {
+          state.d = state.FAIL;
+        }
+        
+        if(rst_n == 0) {
+          state.d = state.IDLE;
+        }
+        
+      // TEST SEVEN: 110
+      state.T7:
+        a = 1;
+        b = 1;
+        cin = 0;
+        
+        io_led[2][1] = 1;
+        seg.values = {4h0, 4h1, 4h1, 4h0};
+        
+        if (sum == 0 && cout == 1 && sc.inc_state == 1) {
+          state.d = state.T8;
+        }
+         
+        if (sum != 0 && cout != 1 && sc.inc_state == 1) {
+          state.d = state.FAIL;
+        }
+        
+        if(rst_n == 0) {
+          state.d = state.IDLE;
+        }
+        
+      // TEST EIGHT: 111
+      state.T8:
+        a = 1;
+        b = 1;
+        cin = 1;
+        
+        io_led[2][0] = 1;
+        seg.values = {4h0, 4h1, 4h1, 4h1};
+        
+        if (sum == 1 && cout == 1 && sc.inc_state == 1) {
+          state.d = state.SUCCESS;
+        }
+         
+        if (sum != 1 && cout != 1 && sc.inc_state == 1) {
+          state.d = state.FAIL;
+        }
+        
+        if(rst_n == 0) {
+          state.d = state.IDLE;
+        }
+       
+      state.FAIL:
+        
+        // fail state that is visited if the output does not match the expected output
+        // displays fail on segments
+     
+        seg.values = {4ha,4hb,4hc,4hd};
+        io_led = 3x{{8hff}};
+        
+        
+        seg.values = {4ha,4hb,4hc,4hd};
+        
+        // reset to allow user to traverse back to idle state
+        
+        if (rst_n == 0) {
+          state.d = state.IDLE;
+        }
+      
+      // state to make sure that all states have output the expected output
+      state.SUCCESS:
+      
+        // display succ if all states pass correctly
+        
+        if (sc.inc_state == 1) {
+          seg.values = {4h5,4he,4hf,4hf};
+          io_led = 3x{{8hff}};
+        }
+        
+        seg.values = {4h5,4he,4hf,4hf};
+        
+        if (rst_n == 0) {
+          state.d = state.IDLE;
+        }
+      }
+    }
+}    

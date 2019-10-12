@@ -1,0 +1,18 @@
+module stateCounter (
+    input clk,  // clock
+    input rst,  // reset
+    output inc_state
+ 
+  ) {
+
+  dff stateCounter[28](.clk(clk));
+  
+  always {
+    inc_state = stateCounter.q[27]; // MSB of stateCounter.q, so inc_state set to 1 every overflow which is every rising edge.
+    stateCounter.d = stateCounter.q + 1;
+    if (stateCounter.q[27]==1) {
+      stateCounter.d[27] = 0;
+    } 
+    
+  }
+}
